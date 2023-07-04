@@ -1,101 +1,77 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as yaml from 'js-yaml';
+import * as fs from 'fs';
+import { createFix } from './createFix';
+
+interface QuickFixOption {
+  message: string;
+  errorCheck: string;
+  quickfix: {
+    text: string;
+    type: string;
+  };
+}
+
+interface QuickFixData {
+  [errorCode: string]: QuickFixOption[];
+}
 
 export function activate(context: vscode.ExtensionContext) {
-	let diagnosticCollection = vscode.languages.createDiagnosticCollection('spectral-extension');
-  
-	vscode.workspace.onDidOpenTextDocument((document) => {
-	  if (document.languageId === 'yaml' || document.languageId === 'yml') {
-		const problems = vscode.languages.getDiagnostics(document.uri);
-		const spectralProblems = problems.filter((problem) => problem.source === 'spectral');
-  
-		spectralProblems.forEach((problem) => {
-		  const { range } = problem;
-  
-		  const diagnostic = new vscode.Diagnostic(
-			range,
-			problem.message,
-			vscode.DiagnosticSeverity.Error
-		  );
-  
-		  diagnostic.source = problem.source;
-		  diagnostic.code = problem.code;
-  
-		  const quickFix = new vscode.CodeAction('Dummy Quick Fix', vscode.CodeActionKind.QuickFix);
-		  quickFix.diagnostics = [diagnostic];
-		  quickFix.isPreferred = true;
-  
-		  quickFix.edit = new vscode.WorkspaceEdit();
-		  quickFix.edit.replace(document.uri, range, 'Dummy Fix');
-  
-		  quickFix.command = {
-			command: 'spectralExtension.showQuickFixMessage',
-			title: 'Show Quick Fix Message',
-			tooltip: 'This is a dummy quick fix command',
-		  };
-  
-		  vscode.languages.registerCodeActionsProvider(document.uri, {
-			provideCodeActions() {
-			  return [quickFix];
-			},
-		  });
-		});
-  
-		if (spectralProblems.length > 0) {
-		  vscode.window.showInformationMessage('Hi spectral');
-		}
-	  }
-	});
-  
-	vscode.workspace.onDidChangeTextDocument((event) => {
-	  const document = event.document;
-	  if (document.languageId === 'yaml' || document.languageId === 'yml') {
-		const problems = vscode.languages.getDiagnostics(document.uri);
-		const spectralProblems = problems.filter((problem) => problem.source === 'spectral');
-  
-		spectralProblems.forEach((problem) => {
-		  const { range } = problem;
-  
-		  const diagnostic = new vscode.Diagnostic(
-			range,
-			problem.message,
-			vscode.DiagnosticSeverity.Error
-		  );
-  
-		  diagnostic.source = problem.source;
-		  diagnostic.code = problem.code;
-  
-		  const quickFix = new vscode.CodeAction('Dummy Quick Fix', vscode.CodeActionKind.QuickFix);
-		  quickFix.diagnostics = [diagnostic];
-		  quickFix.isPreferred = true;
-  
-		  quickFix.edit = new vscode.WorkspaceEdit();
-		  quickFix.edit.replace(document.uri, range, 'Dummy Fix');
-  
-		  quickFix.command = {
-			command: 'spectralExtension.showQuickFixMessage',
-			title: 'Show Quick Fix Message',
-			tooltip: 'This is a dummy quick fix command',
-		  };
-  
-		  vscode.languages.registerCodeActionsProvider(document.uri, {
-			provideCodeActions() {
-			  return [quickFix];
-			},
-		  });
-		});
-  
-		if (spectralProblems.length > 0) {
-		  vscode.window.showInformationMessage('Hi spectral');
-		}
-	  }
-	});
-  
-	context.subscriptions.push(diagnosticCollection);
-  
-	// Register command to show quick fix message
-	context.subscriptions.push(
-	  vscode.commands.registerCommand('spectralExtension.showQuickFixMessage', () => {
-		vscode.window.showInformationMessage('This is a dummy quick fix!');
-	  })
-	);
+  // Register code action provider
+  const codeActionProvider = new MyCodeActionProvider();
+  context.subscriptions.push(
+    vscode.languages.registerCodeActionsProvider({ scheme: 'file', language: 'yaml' }, codeActionProvider)
+  );
+}
+
+class MyCodeActionProvider implements vscode.CodeActionProvider {
+  private quickFixes: QuickFixData = {};
+
+  constructor() {
+    // Load quick fixes from external YAML file
+    const yamlFilePath = path.join(__dirname, 'quickfixes.yaml');
+    const yamlContent = fs.readFileSync(yamlFilePath, 'utf8');
+    this.quickFixes = yaml.load(yamlContent) as QuickFixData;
   }
+
+  provideCodeActions(
+    document: vscode.TextDocument,
+    range: vscode.Range,
+    context: vscode.CodeActionContext
+  ): vscode.CodeAction[] | undefined {
+    const codeActions: vscode.CodeAction[] = [];
+
+    // Check if the file is YAML or YML
+    const extension = path.extname(document.fileName);
+    if (extension !== '.yaml' && extension !== '.yml') {
+      return codeActions;
+    }
+
+    for (const diagnostic of context.diagnostics) {
+      const errorCode = diagnostic.code?.toString();
+      if (errorCode && this.quickFixes[errorCode]) {
+        const options = this.quickFixes[errorCode];
+        for (const option of options) {
+          if (errorCode === 'asyncapi-schema'){
+            if(diagnostic.message.includes(option.errorCheck)) {
+              const fix = createFix(document, range, errorCode, option, this.quickFixes);
+              if (fix) {
+                codeActions.push(fix);
+              }
+            }
+          }else{
+            const fix = createFix(document, range, errorCode, option, this.quickFixes);
+              if (fix) {
+                codeActions.push(fix);
+              }
+          }
+        }
+      }
+    }
+
+    return codeActions;
+  }
+}
+
+
